@@ -17,9 +17,9 @@ install_terraform() {
 }
 
 install_ansible() {
-    sudo dnf install -y epel-release 
-    sudo dnf install -y ansible
-    sudo ln -sf /usr/bin/ansible /usr/bin/ansible
+    sudo dnf install -y python3 python3-pip
+    sudo pip3 install ansible
+    sudo ln -sf /usr/local/bin/ansible /usr/bin/ansible
 }
 
 install_groovy() {
