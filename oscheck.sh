@@ -91,3 +91,40 @@ main() {
 }
 
 main
+
+
+
+
+
+----
+
+check_os() {
+    OS_ID=$(grep -E '^ID=' /etc/os-release | cut -d= -f2 | tr -d '"')
+
+    if [[ "$OS_ID" =~ ^(fedora|centos|rhel|rocky|almalinux)$ ]]; then
+        echo "✅ Supported RHEL-based OS detected ($OS_ID). Proceeding with installation..."
+    elif [[ "$OS_ID" =~ ^(ubuntu|debian)$ ]]; then
+        echo "⚠️ Ubuntu/Debian detected ($OS_ID). Currently not supported, but may be added in the future."
+        exit 1
+    else
+        echo "❌ Unsupported OS detected ($OS_ID). Exiting..."
+        exit 1
+    fi
+}
+
+---------
+
+
+check_os() {
+    OS_ID=$(grep '^ID=' /etc/os-release | cut -d= -f2 | tr -d '"')
+
+    if [[ "$OS_ID" == "fedora" || "$OS_ID" == "centos" || "$OS_ID" == "rhel" || "$OS_ID" == "rocky" || "$OS_ID" == "almalinux" ]]; then
+        echo "✅ Supported OS detected ($OS_ID). Proceeding..."
+    elif [[ "$OS_ID" == "ubuntu" || "$OS_ID" == "debian" ]]; then
+        echo "⚠️ Ubuntu/Debian detected ($OS_ID). Not supported yet."
+        exit 1
+    else
+        echo "❌ Unsupported OS detected ($OS_ID). Exiting..."
+        exit 1
+    fi
+}
