@@ -1,0 +1,45 @@
+stage('CxFlow Jira Integration') {
+    steps {
+        script {
+            def cxOneScanID = sh(script: "jq -r '.scanID' ${env.WORKSPACE}/cx_result.json", returnStdout: true).trim()
+
+            if (cxOneScanID) {
+                // Define JFrog repository details
+                def JFROG_URL = "https://your-jfrog-instance/artifactory"
+                def JFROG_REPO = "cxflow-releases"
+                def CXFLOW_JAR = "cxflow-latest.jar"
+                def CXFLOW_PATH = "${env.WORKSPACE}/cxflow"
+
+                // Ensure directory exists
+                sh "mkdir -p ${CXFLOW_PATH}"
+
+                // Download cxflow.jar from JFrog Artifactory
+                withCredentials([usernamePassword(credentialsId: 'jfrog-credentials', usernameVariable: 'JFROG_USER', passwordVariable: 'JFROG_PASSWORD')]) {
+                    sh """
+                    curl -u $JFROG_USER:$JFROG_PASSWORD -o ${CXFLOW_PATH}/${CXFLOW_JAR} \
+                    ${JFROG_URL}/${JFROG_REPO}/${CXFLOW_JAR}
+                    
+                    chmod +x ${CXFLOW_PATH}/${CXFLOW_JAR}
+                    """
+                }
+
+                // Run CxFlow to create Jira issues
+                sh """
+                java -jar ${CXFLOW_PATH}/${CXFLOW_JAR} \
+                    --cx-project="${cxoneProjectName}_${cxonescan_type}" \
+                    --checkmarx.url="https://fis.cxone.cloud" \
+                    --checkmarx.base-url="https://fis.checkmarx.net" \
+                    --checkmarx.scan-id="$cxOneScanID" \
+                    --jira.url="https://your-jira-instance.com" \
+                    --jira.project="ISTSEC" \
+                    --jira.issue-type="Bug" \
+                    --jira.priority="High" \
+                    --jira.username="\$JIRA_USER" \
+                    --jira.token="\$JIRA_TOKEN"
+                """
+            } else {
+                println "No Checkmarx scan ID found. Skipping CxFlow Jira integration."
+            }
+        }
+    }
+}
