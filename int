@@ -1,0 +1,136 @@
+Issue creation process
+Issues are filtered based on the criteria found in the main configuration of CxFlow (application.yml) along with any particular overrides (severity, category, cwe, status). From the XML structure, the Source identifier is the main tracking element. The Vulnerability+File path is the key, and as additional line references are found for the same key, it is appended to the same issue reference. 
+
+Once scan is finished and the results are retrieved then, cx-flow combines all issues in a single file that have the same category into a single issue, then the provided overrides for filters(severity,cwe,status,category,etc) are applied on those issues and a final list of Xissues is generated. Issues in the provided bug tracker are opened for the generated Xissues.
+
+Issues are collapsed (multiple issues of the same type in the same file are updated within 1 ticket)
+JIRA tickets are generated for all result states except for Not Exploitable vulnerabilities, as they are deemed not to pose a threat.
+
+Tickets are closed if the issue is remediated on next iteration of scan.
+Tickets are re-opened in the event an issue is reintroduced.
+When all vulnerabilities included in a ticket are updated from "Proposed Not Exploitable" to "Not Exploitable" in Checkmarx, the corresponding Jira ticket gets closed automatically.
+All references within a ticket must be addressed before the Ticket is closed.
+Issues that have been marked as Not Exploitable will not be closed if their Jira status does not match any of the list of available open-status issues.
+Software Components & Configuration Details
+Java Runtime 8 or 11 or higher version
+Gradle 6.8.1 (Build)
+Spring Boot 2.6.6, Spring boot is regularly updated as part of ongoing 3rd party library maintenance
+CxFlow can be executed in Server, Docker, Cloud & local modes. In this wiki, we'll see CxFlow execution in Server Mode using CxFlow version 1.6.46
+Create a folder called CxFlow in the server and into this folder, download the latest CxFlow.jar for JDK8 cx-flow-releases
+
+CxFlow requires an application.yml file to drive the execution. Maintain the application.yml in your source code repo and fetch it during execution. The application.yml is where most of the static settings are stored that do not change. These can be configured per organisation and nothing sensitive should be stored in this file unless encrypted.
+
+Attached sample application.yml file wherein replace the values enclosed in ###<>### with your appropriate value. Under the Checkmarx heading, you should enter your service account's username, password, and confirm the base-url. 
+
+Note The client-secret value included here is the correct value for CxSAST and is not actually a secret value. It is the OIDC client secret used for API login to Checkmarx.
+
+Under the JIRA heading, you should enter your service account's username , Personal Access Tokens, Passwords and confirm the jira-url. Provide the token value as the password if token-type is set to PASSWORD. Provide the token value as a personal access token if the token-type is PAT.
+
+Please note the Service Account should have the lowest Jira permission level required to create Jira issues (Bug, Task, Story, etc.) includes Browse projects and Create issues project permissions.
+application.yml Collapse source
+cx-flow:
+  bug-tracker: JIRA
+  bug-tracker-impl:
+  - Jira
+  filter-severity:
+  #Severety to triger the tickets creation
+    - High
+    - Medium
+    - Low
+  filter-category:
+  filter-cwe:
+  filter-status:
+  filter-state:
+  mitre-url: https://cwe.mitre.org/data/definitions/%s.html
+  #codebash-url: https://customer.codebashing.com/courses
+ 
+checkmarx:
+  base-url: ###<cxsast_url>###
+  username: ###<cxsast_username>###
+  password: ###<cxsast_password>###
+  version: 9.5
+  client-id: resource_owner_client
+  client-secret: 014DF517-39D1-4453-B7B3-9930C563627C
+  scope: access_control_api sast_rest_api
+  #team: /CxServer
+  url: ${checkmarx.base-url}/cxrestapi
+  #WSDL Config
+  portal-url: ${checkmarx.base-url}/cxwebinterface/Portal/CxWebService.asmx
+  sdk-url: ${checkmarx.base-url}/cxwebinterface/SDK/CxSDKWebService.asmx
+  portal-wsdl: ${checkmarx.base-url}/Portal/CxWebService.asmx?wsdl
+  sdk-wsdl: ${checkmarx.base-url}/SDK/CxSDKWebService.asmx?wsdl
+ 
+jira:
+   url: ###<jira url>###
+   username: ###<jira user name>###
+   token: ###<jira PAT token>###
+   token-type: PAT
+   #Jira Project Id
+   project: ###<jira project>###
+   #Jira Issue type
+   issue-type: Story
+   #Jira priorities mapping
+   priorities:
+    High: High
+    Medium: Medium
+    Low: Low
+    Informational: Lowest
+  #Jira Trasition status
+   open-transition: Defined
+   close-transition: Complete
+   open-status:
+      - Defined
+      - In Progress
+      - Ready For Test
+      - In Test
+   closed-status:
+      - Completed
+      - Closed
+   http-timeout : 20000
+   sast-issue-summary-format: "[VULNERABILITY] in [PROJECT] with severity [SEVERITY] @ [FILENAME]"
+   sast-issue-summary-branch-format: "[VULNERABILITY] in [PROJECT] with severity [SEVERITY] @ [FILENAME][[BRANCH]]"
+   suppress-code-snippets:
+      - Hardcoded_Password_in_Connection_String
+      - Password_In_Comment
+      - Use_Of_Hardcoded_Password
+   fields:
+#    - type: cx #[ cx | static | result ]
+#      name: Platform # cx custom field name | cx-scan | cwe, category, severity, application, *project*, repo-name, branch, repo-url, namespace, recommendations, loc, site, issueLink, filename, language
+#      jira-field-name: Application
+#      jira-field-type: label #[ security | text | label | single-select | multi-select ]
+     - type: cx
+       name: cx-scan
+       jira-field-name: Application
+       jira-field-type: label
+     - type: result
+       name: application
+       jira-field-name: Application
+       jira-field-type: label
+     - type: result
+       name: cve
+       jira-field-name: CVEs
+       jira-field-type: label
+     - type: result
+       name: cwe
+       jira-field-name: CWEs
+       jira-field-type: label
+     - type: result
+       name: category
+       jira-field-name: Category
+     - type: result
+       name: loc
+       jira-field-name: LOC
+       jira-field-type: label
+       jira-default-value: XXXXX       
+
+CxFlow Execution
+once application.yml is ready, we are using project execution mode command to retrieve the latest scan results for a given team/project and provide feedback (defect / issue tracking). Below command can be configured as shell script and executed post the checkmarx scans in the CI pipeline
+
+Example Collapse source
+java -jar cx-flow-<ver>.jar \
+--project \
+--spring.config.location='<path to application.yml>'
+--cx-team='<cx team name>' \
+--cx-project='<cx project name>' \
+--app='<application name for tracking purpose>'
+--assignee='<jira-assignee>'
