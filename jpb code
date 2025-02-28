@@ -1,0 +1,57 @@
+Jenkinsfile
+@Library(['common-lib@3-stable', 'incubator-lib', 'cm-cicd-pipeline-library', 'ist-switch-jenkins-pipeline-library@oja4_cxone']) _
+
+PipelineRouter(
+node: 'ojaistrhel8build',
+buildParamsYAML: './params.yaml',
+buildcomponent: 'switch_fmtsdk'
+)
+
+params.yaml
+Project_repo: 'istfo/ist-build-tools:master,istfo/ist-release-info:oja_test,istsw/sw_base:release/SW_7.7.0.27.01,istfo/fo_base:release/FO_7.7.0.27.01,istsw/sw_segment:release/SW_7.7.0.27.01,istsw/sw_istauth:release/SW_7.7.0.27.01,istsw/sw_atm:release/SW_7.7.0.27.01,istsw/sw_ddp:release/SW_7.7.0.27.01,istsw/sw_fmtsdk:release/SW_7.7.0.27.01'
+artifactory:
+  upload: true
+  Path: 'https://artifactory.fis.dev/artifactory'
+  REPO:
+    release: 'emeaistswitch-generic-release-local'
+    dev: 'emeaistswitch-generic-snapshot-local'
+build:
+  Flags: '-bt=develop -64'
+cxscan:
+  ProjectName: "ist_oja_sw_fmtsdk_1.1"
+  comment: "test_project_oja_ph_4"
+  isCheckmarxScan: "true"
+  cxscan_type: "dev"
+cxonescan:
+  isCheckmarxOneScan : "true"
+  ProjectName: "ist_Oja_cx_fmtsdk"
+  scan_type: "dev"
+
+
+#blackduck:
+  #ProjectName: 'abc'
+  #ProjectVersion : 'def'
+#veracode:
+  #applicationName: 'IST/SWITCH'
+  #credentials: 'ist-veracode-key'
+  #sandbox: 'testing'
+  #scanname: 'istrelease-scannew'
+
+branch-build.list
+###
+#### BLR Build for Rel_7.7.0.27.01
+####
+#### latest releases
+
+
+BUILDOPT=
+FO_7.7.0.27.01_OS_BASE
+SW_7.7.0.27.01_OS_SEGMENT
+BUILDOPT=
+SW_7.7.0.27.01_OS_BASE
+SW_7.7.0.27.01_OS_FMTSDK
+###BUILDOPT=
+###UPLOAD=0
+###CHKLIB=0
+###FULL=1
+FORCE=1
