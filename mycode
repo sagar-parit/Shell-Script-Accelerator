@@ -1,0 +1,87 @@
+import fis.ist.*
+
+def call(Map params = [:]) {
+    def Jobnameparts = JOB_NAME.tokenize('/') as String[] , datas , datares
+    def isCheckmarxScan
+    def isCheckmarxOneScan
+    String PathVar , os_dir , myArtifact
+
+    pipeline {
+        agent {
+            node {
+                label "${params.node}"
+                customWorkspace "workspace/${params.buildcomponent}_${Jobnameparts[2]}/${env.BRANCH_NAME.replaceAll('/','_')}/${BUILD_NUMBER}"
+            }
+        }
+        parameters{
+            booleanParam(defaultValue: true, description: 'Run Checkmarx Scan', name: 'isCheckmarxScan')
+            booleanParam(defaultValue: true, description: 'Run CheckmarxOne Scan', name: 'isCheckmarxOneScan')
+        }
+
+        options {
+            timestamps ()
+            timeout (time: 95, unit: 'MINUTES')
+            buildDiscarder(logRotator(numToKeepStr: '10', artifactNumToKeepStr: '10'))
+        }
+
+        stages {
+            stage('Read Parameters') {
+                steps {
+                    script {
+                        println "Reading Parameters"
+                        def config = readYaml file: 'params.yaml'
+                        println "cfg:${config}"
+                        cxProjectName = config.cxscan.ProjectName
+                        teamPath = config.cxscan.teamPath
+                        comment = config.cxscan.comment
+                        scan_type = config.cxscan.cxscan_type
+                        isCheckmarxScan = config.cxscan.isCheckmarxScan
+                        isCheckmarxOneScan = config.cxonescan.isCheckmarxOneScan
+                        cxoneProjectName = config.cxonescan.ProjectName
+                        cxonescan_type = config.cxonescan.scan_type
+                    }
+                }
+            }
+
+            // Existing pipeline stages...
+            
+            stage('Checkmarx One') {
+                steps {
+                    script {
+                        echo "Running CheckmarxOne scan"
+                        // CheckmarxOne scan logic...
+                    }
+                }
+            }
+
+            // New CxFlow Integration Stage
+            stage('CxFlow Integration') {
+                steps {
+                    script {
+                        echo "Executing CxFlow to push results to JIRA"
+                        sh """
+                            java -jar cx-flow.jar \
+                            --checkmarx.base-url=https://fis.checkmarx.net \
+                            --checkmarx.username=\$CHECKMARX_USER \
+                            --checkmarx.password=\$CHECKMARX_PASSWORD \
+                            --jira.project=${cxProjectName} \
+                            --jira.issue-type=Bug \
+                            --jira.url=https://your-jira-instance.atlassian.net \
+                            --jira.username=\$JIRA_USER \
+                            --jira.token=\$JIRA_API_TOKEN \
+                            --scan.id=${env.BUILD_NUMBER} \
+                            --bug-tracker=jira
+                        """
+                    }
+                }
+            }
+        }
+
+        post {
+            always {
+                println "Executing post-build cleanup"
+                cleanWs deleteDirs: true, notFailBuild: true
+            }
+        }
+    }
+}
