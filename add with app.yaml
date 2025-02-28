@@ -1,0 +1,45 @@
+stage('CxFlow Jira Integration') {
+    steps {
+        script {
+            def cxOneScanID = sh(script: "jq -r '.scanID' ${env.WORKSPACE}/cx_result.json", returnStdout: true).trim()
+
+            if (cxOneScanID) {
+                // Define necessary variables
+                def JFROG_URL = "https://your-jfrog-instance/artifactory"
+                def JFROG_REPO = "cxflow-releases"
+                def CXFLOW_JAR = "cxflow-latest.jar"
+                def CXFLOW_PATH = "${env.WORKSPACE}/cxflow"
+                def CONFIG_PATH = "${CXFLOW_PATH}/application.yml"
+
+                // Ensure directory exists
+                sh "mkdir -p ${CXFLOW_PATH}"
+
+                // Download cxflow.jar from JFrog Artifactory
+                withCredentials([usernamePassword(credentialsId: 'jfrog-credentials', usernameVariable: 'JFROG_USER', passwordVariable: 'JFROG_PASSWORD')]) {
+                    sh """
+                    curl -u $JFROG_USER:$JFROG_PASSWORD -o ${CXFLOW_PATH}/${CXFLOW_JAR} \
+                    ${JFROG_URL}/${JFROG_REPO}/${CXFLOW_JAR}
+                    
+                    chmod +x ${CXFLOW_PATH}/${CXFLOW_JAR}
+                    """
+                }
+
+                // Ensure application.yml is in place (can be checked out or copied as needed)
+                sh "cp ${env.WORKSPACE}/config/application.yml ${CONFIG_PATH}"
+
+                // Run CxFlow to create Jira issues using project execution mode
+                sh """
+                java -jar ${CXFLOW_PATH}/${CXFLOW_JAR} \
+                    --project \
+                    --spring.config.location=${CONFIG_PATH} \
+                    --cx-team='your-cx-team' \
+                    --cx-project='your-cx-project' \
+                    --app='your-application-name' \
+                    --assignee='jira-assignee'
+                """
+            } else {
+                println "No Checkmarx scan ID found. Skipping CxFlow Jira integration."
+            }
+        }
+    }
+}
