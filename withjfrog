@@ -1,0 +1,377 @@
+import fis.ist.*
+
+def call(Map params = [:]) {
+    def Jobnameparts = JOB_NAME.tokenize('/') as String[] , datas , datares
+    def isCheckmarxScan
+    def isCheckmarxOneScan
+    String PathVar , os_dir , myArtifact
+
+    pipeline {
+        agent {
+            node {
+                label "${params.node}"
+                customWorkspace "workspace/${params.buildcomponent}_${Jobnameparts[2]}/${env.BRANCH_NAME.replaceAll('/','_')}/${BUILD_NUMBER}"
+            }
+        }
+        parameters{
+            booleanParam(defaultValue: true, description: 'Run Checkmarx Scan', name: 'isCheckmarxScan')
+            booleanParam(defaultValue: true, description: 'Run CheckmarxOne Scan', name: 'isCheckmarxOneScan')
+        }
+
+        options {
+            timestamps ()
+            timeout (time: 95, unit: 'MINUTES')
+            buildDiscarder(logRotator(numToKeepStr: '10', artifactNumToKeepStr: '10'))
+        }
+
+        stages {
+            stage('Read Parameters') {
+                steps {
+                    script {
+                        println "Reading Parameters"
+                        def config = readYaml file: 'params.yaml'
+                        println "cfg:${config}"
+                        cxProjectName = config.cxscan.ProjectName
+                        teamPath = config.cxscan.teamPath
+                        comment = config.cxscan.comment
+                        scan_type = config.cxscan.cxscan_type
+                        isCheckmarxScan = config.cxscan.isCheckmarxScan
+                        isCheckmarxOneScan = config.cxonescan.isCheckmarxOneScan
+                        cxoneProjectName = config.cxonescan.ProjectName
+                        cxonescan_type = config.cxonescan.scan_type
+
+                    }
+                }
+            }
+
+            stage('setup') {
+                steps {
+                    script {
+                        println "Setting Parameters"
+                        try {
+                            String MyOS= sh (script:"uname -s | awk '{print \$1}'", returnStdout:true).trim().toString()
+                            if ( "${MyOS}" == "Linux" ) {
+                                new CppBuild().env_linux()
+                                os_dir="lin"
+                                PathVar="$PATH:${env.WORKSPACE}/gitroot/ist-build-tools/autobase/scripts:/Osrc8/tools/bin:/Osrc8/oracle/lin64_ora_19C:$JAVA_HOME:$CLASSPATH:/usr/share/bcc/tools:/root/testing:/Osrc8/local/bin/_LINUX2.6_i386_13/bin:/usr/lib64:/usr/lib"
+                                println "This is a Linux Build ..."
+                            } else if ( "${MyOS}" == "SunOS" ) {
+                                os_dir="sol"
+                                PathVar=""
+                                println "This is a Solaris Build ..."
+                            } else if ( "${MyOS}" == "AIX" ) {
+                                new CppBuild().env_aix()
+                                os_dir="aix"
+                                PathVar="/Osrc/local/bin/_AIX5.3_risc6000/bin:/opt/IBM/xlc/13.1.3/bin:/build/ist-build-tools/autobase/scripts:/Osrc/tools/bin:/Osrc/oracle/aix64_ora_1911:/usr/share/bcc/tools:/usr/lib64:/usr/lib:/opt/freeware/lib:$PATH"
+                                println "This is a AIX Build ..."
+                            } else if ( "${MyOS}" == "HP-UX" ) {
+                                os_dir="hpux"
+                                PathVar=""
+                                println "This is a HP-UX Build ..."
+                            } else {
+                                println "Unknown Operating System. Will not build."
+                            }
+
+                            datas = readYaml file: params.buildParamsYAML
+                            datares = readYaml(text: libraryResource('fis/IST/Parameters.yaml'))
+
+                            if ("${params.buildType}" == "development") {
+                                def readContent = readFile './branch-build.list'
+                                writeFile file: './branch-build.list', text: readContent+"\n${Jobnameparts[2].toLowerCase()}:${env.BRANCH_NAME}"
+                            }
+                        }
+                        catch(Exception e) {
+                            println e
+                            currentBuild.result = Error
+                        }
+                    }
+                }
+            }
+
+            stage ('Download dependency') {
+                steps {
+                    println "Stage: Download depencency repos."
+                    dir ('gitroot') {
+                        script {
+                            BUILD_TYPE = params.BUILD_TYPE
+                            new CppBuild().downloaddependency(
+                                    project_repo: "${datas.Project_repo}",
+                                    gitCreds: "cm-credentials-id"
+                            )
+                        }
+                    }
+                }
+            }
+
+            stage('Build') {
+                environment {
+                    GIT_CRED = credentials('cm-credentials-id')
+                    GITROOT="${env.WORKSPACE}/gitroot"
+                    IST_TOOLS="${env.WORKSPACE}/gitroot/ist-build-tools"
+                    PATH="${PathVar}"
+                }
+                steps {
+                    println "Stage: Build the Artifact."
+                    script {
+                        if (params.productname == 'ist-release-info') {
+                            myArtifact = new CppBuild().build(
+                                    artFile: "${Jobnameparts[2]}/${env.BRANCH_NAME.replaceAll('/','_')}/${BUILD_NUMBER}",
+                                    build_Flags: "${datas.build.Flags}",
+                                    os: "${os_dir}",
+                                    releasefile: sh (script: "cat ${GITROOT}/ist-release-info/rel_info/build.release", returnStdout: true).toString().trim(),
+                                    ArtCred: ("${params.buildType}" == "release") ? "svcacct_istartifact_release" : "svcacct_istartifact"
+                            )
+                        } else {
+                            myArtifact = new CppBuild().build(
+                                    artFile: "${Jobnameparts[2]}/${env.BRANCH_NAME.replaceAll('/','_')}/${BUILD_NUMBER}",
+                                    build_Flags: "${datas.build.Flags}",
+                                    os: "${os_dir}",
+                                    ArtCred: ("${params.buildType}" == "release") ? "svcacct_istartifact_release" : "svcacct_istartifact"
+                            )
+                        }
+
+                        if ( "${myArtifact}" != "NoArtifact") {
+                            println "Copy Artifact to workspace"
+                            sh """
+                            cp ${myArtifact} .
+                            """
+                        }
+                    }
+                }
+            }
+
+
+            stage('Checkmarx') {
+                /*when {
+                    expression {isCheckmarxScan == true}
+                }*/
+                steps {
+                    script {
+                        step([
+                                $class                       : 'CxScanBuilder',
+                                excludeFolders               : "bdir,pdir,release_info,sdir,buildlog",
+                                exclusionsSetting            : "",
+                                filterPattern                : '''!**/_cvs/**/*, !**/export:BLD_CREDENTIALS/**/*,   
+									!**/.hg/**/*,   !**/.git/**/*,  !**/*profile**, !**/*.jar,
+									!**/obj/**/*,   !**/*README*,   !**/*pkg**,      
+									!**/*Jenkinsfile,  !**/*Readme.Md,   !**/*.gitignore, 
+									!**/*.tmp,     !**/*.txt,      !**/*.dll,         
+									!**/*.mpa,     !**/*.tgz,      !**/*.xml, 	   
+									!**/*.m4,      !**/*.la,       !**/*.hpp,      !**/*.swf,           	            
+									!**/*.tar.gz,  !**/*.tar,      !**/*.gz,       !**/configure_fast/*,           
+									!**/*.war,     !**/site/*,     !**/configure/*,
+									!**/*.db2,     !**/*.yaml,     !**/*.log,      !**/*.json,
+									!**/*.so,      !**/*.in,       !**/*.sl,       !**/*.a,
+									!**/exclude/*, !**/*demo*/*,   !**/test/*,     !**/tests/*, 
+									!**/INSTALL, !**/*NOTES,  !**/NEWS,     !**/COPYING, 
+									!**/misc/*,    !**/*.pm,       !**/*.scr,      !**/*.class,  !Checkmarx/Reports/*.*''',
+                                fullScanCycle                : 10,
+                                generatePdfReport            : true,
+                                teamPath                     : 'CxServer\\SP\\FIS\\BankingSolutions\\Retail Payments - Intl\\ISTApps',
+                                incremental                  :'incremental',
+                                jobStatusOnError             : 'FAILURE',
+                                preset                       : '100000',
+                                projectName                  : "${cxProjectName}_${scan_type}",
+                                sastEnabled                  : true,
+                                sourceEncoding               : '1',
+                                vulnerabilityThresholdEnabled: true,
+                                vulnerabilityThresholdResult : 'FAILURE',
+                                serverUrl                    : 'https://fis.checkmarx.net',
+                                useOwnServerCredentials      : true,
+                                credentialsId                : 'IST-CheckMarx',
+                                comment                      : "${comment}"
+                        ])
+                    }
+                }
+            }
+
+
+
+            stage('Checkmarx One') {
+                //when { expression {isCheckmarxOneScan == true}  }
+                steps {
+                    script {
+                        dir("${env.WORKSPACE}/tgz") {
+                            sh """
+						echo "Copying artifact to tgz path for Checkmarx Scan ${myArtifact}"
+						cp ${myArtifact} ${env.WORKSPACE}/tgz
+						ls -lart ${env.WORKSPACE}/tgz
+						tar -xvzf *.tgz
+						"""
+                        }
+                        dir("${env.WORKSPACE}/checkmarx_testing") {
+                            String cxOneScanID
+                            echo "Downloading ScaResolver"
+                            sh """
+						pwd
+						curl -L https://sca-downloads.s3.amazonaws.com/cli/2.6.9/ScaResolver-linux64.tar.gz -o ScaResolver-linux64.tar.gz
+						tar -xvf ScaResolver-linux64.tar.gz
+						rm ScaResolver-linux64.tar.gz
+						chmod +x ScaResolver
+						"""
+                            scaResovlerPath=sh(script: 'realpath ScaResolver', returnStdout: true)
+                            echo "SCA RESOLVER PATH: $scaResovlerPath"
+                            echo "I am in Running CheckmarxOne scan"
+                            env.SOURCE_PATH = "${env.WORKSPACE}/tgz"
+                            versionToUse = "ast-cli_latest_linux_x64.tar.gz"
+                            try{
+                                dir('/data/jenkins/tools/com.checkmarx.jenkins.tools.CheckmarxInstallation/CxASTCLI'){
+                                    sh """
+								rm -f cx
+								tar -xvf $versionToUse
+								chmod +x cx
+								./cx version
+								"""
+                                }
+
+                                addlOptions="""--debug --tags 2187 --project-groups CxOne_BS_IST_Switch_A2187 -s $SOURCE_PATH --sca-resolver $PATH --report-format json,summaryHTML,PDF --output-path "${env.WORKSPACE}" --project-tags scid:2187 --sast-preset-name ASA-Default --scan-types sca --sca-resolver $scaResovlerPath --sca-resolver-params "--ignore-test-dependencies true --ignore-dev-dependencies true"
+							"""
+                                checkmarxASTScanner additionalOptions: addlOptions, baseAuthUrl: '', branchName: "${env.BRANCHNAME}", checkmarxInstallation: 'CxASTCLI', credentialsId: "CXONE_SWITCH_API", projectName:"${cxoneProjectName}_${cxonescan_type}", serverUrl: 'https://fis.cxone.cloud', tenantName: 'fis', useOwnAdditionalOptions: true, useOwnServerCredentials: true
+                                echo "Current Build Result is = ${currentBuild.result}"
+                                currentBuild.result='SUCCESS'
+                                // threshold sca-high=1;sca-medium=1
+                                if (fileExists("${env.WORKSPACE}/cx_result.json")){
+                                    def json = readJSON file: "${env.WORKSPACE}/cx_result.json"
+                                    def scanID = json.scanID
+                                    cxOneScanID = "${scanID}"
+                                    echo "cxOneScanID: ${cxOneScanID}"
+                                }
+                                else
+                                {
+                                    echo "File does not exist."
+                                }
+                            }
+                            catch(err){
+                                echo "Error in CX One Scan: $err"
+                                echo "Current Build Result is = ${currentBuild.result}"
+                                currentBuild.result='SUCCESS'
+                            }finally{
+                                echo "Current Build Result is = ${currentBuild.result}"
+                                currentBuild.result='SUCCESS'
+                            }
+                            return cxOneScanID
+                        }
+                    }
+                }
+            }
+            stage('Checkmarx One') {
+                steps {
+                    script {
+                        ...  // Existing Checkmarx One scan logic
+
+                        if (fileExists("${env.WORKSPACE}/cx_result.json")){
+                            def json = readJSON file: "${env.WORKSPACE}/cx_result.json"
+                            def scanID = json.scanID
+                            cxOneScanID = "${scanID}"
+                            echo "cxOneScanID: ${cxOneScanID}"
+                        } else {
+                            echo "File does not exist."
+                        }
+                    }
+                }
+            }
+
+            stage('CxFlow Jira Integration') {
+                steps {
+                    script {
+                        def cxOneScanID = sh(script: "jq -r '.scanID' ${env.WORKSPACE}/cx_result.json", returnStdout: true).trim()
+
+                        if (cxOneScanID) {
+                            // Define JFrog repository details
+                            def JFROG_URL = "https://your-jfrog-instance/artifactory"
+                            def JFROG_REPO = "cxflow-releases"
+                            def CXFLOW_JAR = "cxflow-latest.jar"
+                            def CXFLOW_PATH = "${env.WORKSPACE}/cxflow"
+
+                            // Ensure directory exists
+                            sh "mkdir -p ${CXFLOW_PATH}"
+
+                            // Download cxflow.jar from JFrog Artifactory
+                            withCredentials([usernamePassword(credentialsId: 'jfrog-credentials', usernameVariable: 'JFROG_USER', passwordVariable: 'JFROG_PASSWORD')]) {
+                                sh """
+                                curl -u $JFROG_USER:$JFROG_PASSWORD -o ${CXFLOW_PATH}/${CXFLOW_JAR} \
+                                ${JFROG_URL}/${JFROG_REPO}/${CXFLOW_JAR}
+                                
+                                chmod +x ${CXFLOW_PATH}/${CXFLOW_JAR}
+                                """
+                            }
+
+                            // Run CxFlow to create Jira issues
+                            sh """
+                            java -jar ${CXFLOW_PATH}/${CXFLOW_JAR} \
+                                --cx-project="${cxoneProjectName}_${cxonescan_type}" \
+                                --checkmarx.url="https://fis.cxone.cloud" \
+                                --checkmarx.base-url="https://fis.checkmarx.net" \
+                                --checkmarx.scan-id="$cxOneScanID" \
+                                --jira.url="https://your-jira-instance.com" \
+                                --jira.project="ISTSEC" \
+                                --jira.issue-type="Bug" \
+                                --jira.priority="High" \
+                                --jira.username="$JIRA_USER" \
+                                --jira.token="$JIRA_TOKEN"
+                            """
+                        } else {
+                            println "No Checkmarx scan ID found. Skipping CxFlow Jira integration."
+                        }
+                    }
+                }
+            }
+        
+            stage('upload to artifactory') {
+                when {
+                    allOf {
+                        expression {datas.artifactory.upload == true}
+                        // expression {params.buildType == "release"}
+                    }
+                }
+                steps {
+                    script {
+                        if (! datas.build.Flags.contains("notgz")) {
+                            new CppBuild().artifactUpload(
+                                    myArtifact: "${myArtifact}",
+                                    uploadrepo: ("${params.buildType}" == "release") ? datas.artifactory.REPO.release : datas.artifactory.REPO.dev,
+                                    endpoint: datas.artifactory.Path,
+                                    ArtCreds: ("${params.buildType}" == "release") ? "svcacct_istartifact_release" : "svcacct_istartifact",
+                                    buildType: "${params.buildType}",
+                                    destinationPath: datas.artifactory.Path + "/" + (("${params.buildType}" == "release") ? datas.artifactory.REPO.release : datas.artifactory.REPO.dev) + "/rel_tgz/OJA_test/${os_dir}"
+                            )
+                        } else {
+                            println "No Artifact generated. Nothing to upload. Remove -notgz flag if you wish to generate the artifact"
+                        }
+                    }
+                }
+                post {
+                    always {
+                        script {
+                            println "RESULT: ${currentBuild.result}"
+                        }
+                    }
+                }
+            }
+        }
+        post {
+            always {
+                println "Executing the post Build/Run statements. Clean up the workspace"
+                println "RESULT: ${currentBuild.result}"
+                script {
+                    if (! datas.build.Flags.contains("notgz")) {
+                        archiveArtifacts artifacts: sh(script:"echo ${myArtifact} | awk -F'/' '{print \$NF }'" , returnStdout:true).trim().toString(), onlyIfSuccessful: true
+                        println "artifact "+ sh(script:"echo ${myArtifact} | awk -F'/' '{print \$NF }'" , returnStdout:true).trim().toString() + " archived."
+                    }
+                    else {
+                        println "No Artifact to Archive......"
+                    }
+
+                    sh """
+                        rm -rf /tmp/${Jobnameparts[2]}/${env.BRANCH_NAME.replaceAll('/','_')}/${BUILD_NUMBER}
+                    """
+                    buildNotification {
+                        emailId = ("${params.buildType}" == "release") ? datas.email : sh (script: 'git --no-pager show -s --format=\'%ae\'',returnStdout: true).trim() //"${emailId}"
+                        echo "Finished!"
+                    }
+                }
+                cleanWs deleteDirs: true, notFailBuild: true
+            }
+        }
+    }
+}
