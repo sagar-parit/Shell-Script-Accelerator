@@ -1,0 +1,58 @@
+stage('CxFlow Jira Integration') {
+    steps {
+        script {
+            def cxOneScanID = sh(script: "jq -r '.scanID' ${env.WORKSPACE}/cx_result.json", returnStdout: true).trim()
+            def cxSASTScanID = sh(script: "jq -r '.sastScanID' ${env.WORKSPACE}/cx_result.json", returnStdout: true).trim()
+
+            if (!cxSASTScanID) {
+                // Fetch latest CxSAST scan ID via API if not available
+                def cxSASTScanResponse = sh(
+                    script: """
+                    curl -s -X GET "https://fis.checkmarx.net/cxrestapi/sast/scans?projectId=YOUR_PROJECT_ID&last=1" \\
+                    -H "Authorization: Bearer ${CX_SAST_TOKEN}" -H "Accept: application/json"
+                    """,
+                    returnStdout: true
+                ).trim()
+
+                cxSASTScanID = sh(script: "echo '${cxSASTScanResponse}' | jq -r '.[0].id'", returnStdout: true).trim()
+            }
+
+            if (cxSASTScanID) {
+                println "Using CxSAST Scan ID: ${cxSASTScanID}"
+
+                // Define JFrog repository details
+                def JFROG_URL = "https://your-jfrog-instance/artifactory"
+                def JFROG_REPO = "cxflow-releases"
+                def CXFLOW_JAR = "cxflow-latest.jar"
+                def CXFLOW_PATH = "${env.WORKSPACE}/cxflow"
+
+                // Ensure directory exists
+                sh "mkdir -p ${CXFLOW_PATH}"
+
+                // Download cxflow.jar from JFrog Artifactory
+                withCredentials([usernamePassword(credentialsId: 'jfrog-credentials', usernameVariable: 'JFROG_USER', passwordVariable: 'JFROG_PASSWORD')]) {
+                    sh """
+                    curl -u $JFROG_USER:$JFROG_PASSWORD -o ${CXFLOW_PATH}/${CXFLOW_JAR} \
+                    ${JFROG_URL}/${JFROG_REPO}/${CXFLOW_JAR}
+                    
+                    chmod +x ${CXFLOW_PATH}/${CXFLOW_JAR}
+                    """
+                }
+
+                // Run CxFlow to create Jira issues
+                sh """
+                java -jar ${CXFLOW_PATH}/${CXFLOW_JAR} \\
+                    --project \\
+                    --spring.config.location='${env.WORKSPACE}/config/application.yml' \\
+                    --cx-team='YOUR_CX_TEAM' \\
+                    --cx-project='YOUR_CX_PROJECT' \\
+                    --app='YOUR_APPLICATION' \\
+                    --cx-sast-scan-id='${cxSASTScanID}' \\
+                    --assignee='JIRA_ASSIGNEE'
+                """
+            } else {
+                println "No CxSAST scan ID found. Skipping CxFlow Jira integration."
+            }
+        }
+    }
+}
